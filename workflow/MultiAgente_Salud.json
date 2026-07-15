@@ -1,0 +1,673 @@
+{
+  "name": "Manta Cuida IA - Multiagente Salud GPT-5.6",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "health/chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "3c9b7a89-7611-402c-8ce8-6ad391128894",
+      "name": "Webhook Salud",
+      "webhookId": "003756cd-a4ad-4b07-8413-6e677a9c7b71"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body || {};\nconst raw = body.message?.content ?? body.message ?? '';\nconst message = typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim();\nif (!message) throw new Error('message.content es obligatorio');\nif (message.length > 6000) throw new Error('Mensaje demasiado largo');\nreturn { json: {\n  session_id: String(body.session?.id || body.conversation_id || $execution.id),\n  conversation_id: String(body.conversation_id || body.session?.id || ''),\n  user_id: String(body.user_id || ''),\n  message,\n  channel: body.channel || 'web',\n  locale: body.locale || 'es-EC'\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "646b3d02-a183-4dd0-a33f-ec9b7a0125c9",
+      "name": "Normalizar Entrada"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Normalizar Entrada').first().json;\nconst normalized = input.message.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\nconst patterns = [\n  ['dificultad respiratoria', /dificultad para respirar|no puede respirar|me falta el aire/],\n  ['dolor fuerte en el pecho', /dolor (muy )?fuerte en el pecho/],\n  ['pérdida de conciencia', /perdio el conocimiento|esta inconsciente|no responde/],\n  ['convulsión', /convulsion|convulsionando/],\n  ['sangrado abundante', /sangrado abundante|no para de sangrar/],\n  ['riesgo de autolesión', /se quiere matar|intento de suicidio|hacerme dano|hacerme daño/]\n];\nconst warnings = patterns.filter(([, regex]) => regex.test(normalized)).map(([label]) => label);\nconst vulnerable = /embaraz|bebe|reci[eé]n nacido|adulto mayor|diabetes|hipertension/.test(normalized);\nreturn { json: {\n  emergency_detected: warnings.length > 0,\n  warning_signs: warnings,\n  minimum_priority: warnings.length ? 'EMERGENCY' : null,\n  vulnerable_context: vulnerable\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "f9f7ff0d-c2af-459b-8853-2a69ff16dc86",
+      "name": "Reglas Determinísticas"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COALESCE((SELECT jsonb_agg(x ORDER BY x.created_at) FROM (\n    SELECT rol AS role, contenido AS content, created_at\n    FROM mensajes WHERE conversacion_id = $1::uuid\n    ORDER BY created_at DESC LIMIT 20\n  ) x), '[]'::jsonb) AS history,\n  COALESCE((SELECT to_jsonb(hc) FROM health_cases hc WHERE hc.conversation_id = $1::uuid LIMIT 1), '{}'::jsonb) AS current_case;",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalizar Entrada').first().json.conversation_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        0
+      ],
+      "id": "7795986f-9d90-418e-9a72-aa2b3ee07d4f",
+      "name": "Leer Contexto",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.6-sol",
+          "mode": "list",
+          "cachedResultName": "GPT-5.6-SOL"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "# IDENTIDAD\nEres el Orquestador de Manta Cuida IA. No hablas con el usuario. Analizas el mensaje, el historial y las reglas determinísticas para decidir qué agentes intervienen.\n\n# SALIDA\nDevuelve únicamente JSON válido:\n{\n  \"intent\": \"EMERGENCY | PRIORITY_CARE | SERVICE_SEARCH | PROCEDURE_GUIDANCE | PREVENTION | APPOINTMENT | FOLLOW_UP | ACCESSIBILITY_HELP | GENERAL_HEALTH | OTHER\",\n  \"goal\": \"objetivo breve\",\n  \"agents\": [\"TRIAGE\", \"SERVICES\", \"PREVENTION\"],\n  \"requires_location\": true,\n  \"requires_immediate_safety_check\": false\n}\n\n# REGLAS\n- Incluye TRIAGE cuando se mencionen síntomas, dolor, enfermedad, embarazo, accidente, edad, antecedentes o dudas sobre urgencia.\n- Incluye SERVICES cuando se busque hospital, centro, laboratorio, farmacia, cita, especialidad, horario, dirección o requisitos.\n- Incluye PREVENTION cuando se pidan trámites, vacunación, prevención, información educativa o explicación paso a paso.\n- Si deterministic_safety.emergency_detected=true, intent debe ser EMERGENCY, incluye TRIAGE y requires_immediate_safety_check=true.\n- Usa el historial para interpretar respuestas cortas.\n- No diagnostiques, no aconsejes medicamentos y no inventes servicios."
+            },
+            {
+              "content": "=={{ JSON.stringify({ message: $('Normalizar Entrada').first().json.message, history: $('Leer Contexto').first().json.history, current_case: $('Leer Contexto').first().json.current_case, deterministic_safety: $('Reglas Determinísticas').first().json }, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        960,
+        0
+      ],
+      "id": "67f0abbb-caa5-4743-a65c-f30bf3212f25",
+      "name": "Orquestador"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.6-sol",
+          "mode": "list",
+          "cachedResultName": "GPT-5.6-SOL"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "# IDENTIDAD\nEres el Agente de Clasificación y Acceso de Manta Cuida IA. Tu salida es interna y estructurada. No diagnosticas y no recetas.\n\n# OBJETIVO\nExtrae únicamente información expresada por el usuario, clasifica la prioridad y señala datos faltantes. La regla determinística es autoritativa: nunca reduzcas una emergencia ya detectada.\n\n# PRIORIDADES\nEMERGENCY: posible riesgo inmediato. PRIORITY: valoración prioritaria. ROUTINE: consulta programable. PREVENTIVE: prevención o trámite.\n\n# SALIDA JSON ESTRICTA\n{\n  \"reported_age\": null,\n  \"location\": \"\",\n  \"sector\": \"\",\n  \"reason\": \"\",\n  \"reported_symptoms\": [],\n  \"symptom_duration\": \"\",\n  \"relevant_conditions\": [],\n  \"accessibility_needs\": [],\n  \"access_barriers\": [],\n  \"priority_level\": \"EMERGENCY | PRIORITY | ROUTINE | PREVENTIVE\",\n  \"priority_score\": 0,\n  \"warning_signs\": [],\n  \"requested_service\": \"\",\n  \"recommended_service_type\": \"\",\n  \"summary\": \"\",\n  \"status\": \"NEW | ORIENTED | REFERRED | PENDING_REVIEW | FOLLOW_UP | RESOLVED | CLOSED\",\n  \"requires_human_review\": false,\n  \"consent\": false,\n  \"missing_information\": []\n}\n\n# PROHIBICIONES\nNo afirmes una enfermedad, no prescribas, no indiques dosis, no garantices que algo es leve y no inventes información faltante."
+            },
+            {
+              "content": "=={{ JSON.stringify({ message: $('Normalizar Entrada').first().json.message, orchestrator: $('Orquestador').first().json.output?.[0]?.content?.[0]?.text, deterministic_safety: $('Reglas Determinísticas').first().json, current_case: $('Leer Contexto').first().json.current_case, history: $('Leer Contexto').first().json.history }, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "7b342159-e85e-4ce4-9063-072bb485c742",
+      "name": "Agente de Clasificación y Acceso"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(jsonb_agg(s ORDER BY s.emergency_available DESC, s.name), '[]'::jsonb) AS services\nFROM (SELECT id, name, institution_type, service_type, city, sector, address, phone, schedule,\n emergency_available, specialties, accessibility_features, requirements, source_name, source_reference,\n verified_at::text, active FROM health_services WHERE active = TRUE AND city ILIKE 'Manta' LIMIT 12) s;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        -120
+      ],
+      "id": "5da42f4b-02ff-41da-8077-25d8bd496c05",
+      "name": "Consultar Servicios",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(jsonb_agg(c), '[]'::jsonb) AS content\nFROM (SELECT id, topic, title, content, keywords, source_organization, source_document, source_reference,\n version, verified_at::text FROM approved_health_content\n WHERE approval_status = 'approved' AND active = TRUE ORDER BY updated_at DESC LIMIT 12) c;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        120
+      ],
+      "id": "11236431-d69c-4d9b-88d6-a9436afe3af9",
+      "name": "Consultar Contenido Aprobado",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.6-sol",
+          "mode": "list",
+          "cachedResultName": "GPT-5.6-SOL"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "# IDENTIDAD\nEres el Agente de Acceso a Servicios. Recibes un caso estructurado y un directorio verificado.\n\n# TAREA\nSelecciona hasta 3 servicios que correspondan al tipo de atención, ciudad, sector y accesibilidad. No inventes registros ni disponibilidad. Si el directorio no contiene una opción adecuada, devuelve una lista vacía.\n\n# SALIDA JSON\n{\n  \"services\": [\n    {\"id\":\"\",\"name\":\"\",\"institution_type\":\"\",\"service_type\":\"\",\"city\":\"\",\"sector\":\"\",\"address\":\"\",\"phone\":\"\",\"schedule\":\"\",\"emergency_available\":false,\"specialties\":[],\"accessibility_features\":[],\"requirements\":[],\"source_name\":\"\",\"source_reference\":\"\",\"verified_at\":\"\",\"active\":true}\n  ],\n  \"selection_reason\": \"\",\n  \"availability_warning\": \"Confirma horario y disponibilidad directamente con la institución.\"\n}"
+            },
+            {
+              "content": "=={{ JSON.stringify({ message: $('Normalizar Entrada').first().json.message, triage: $('Agente de Clasificación y Acceso').first().json.output?.[0]?.content?.[0]?.text, directory: $('Consultar Servicios').first().json.services }, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1680,
+        -120
+      ],
+      "id": "6967a590-ea71-4c5d-b209-eef53f598054",
+      "name": "Agente de Acceso a Servicios"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.6-sol",
+          "mode": "list",
+          "cachedResultName": "GPT-5.6-SOL"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "# IDENTIDAD\nEres el Agente de Prevención y Trámites. Solo puedes usar el contenido aprobado proporcionado.\n\n# TAREA\nResume la información aplicable en lenguaje sencillo y pasos cortos. Si no existe contenido aprobado pertinente, marca supported=false y no inventes.\n\n# SALIDA JSON\n{\n  \"supported\": false,\n  \"topic\": \"\",\n  \"guidance\": \"\",\n  \"steps\": [],\n  \"sources\": [{\"title\":\"\",\"organization\":\"\",\"reference\":\"\",\"verified_at\":\"\"}],\n  \"missing_reason\": \"\"\n}\n\nNo diagnostiques, no recetes y no sustituyas instrucciones institucionales."
+            },
+            {
+              "content": "=={{ JSON.stringify({ message: $('Normalizar Entrada').first().json.message, orchestrator: $('Orquestador').first().json.output?.[0]?.content?.[0]?.text, approved_content: $('Consultar Contenido Aprobado').first().json.content }, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1680,
+        120
+      ],
+      "id": "c1252ebd-712a-4ebe-ae5f-038bccf18240",
+      "name": "Agente de Prevención y Trámites"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.6-sol",
+          "mode": "list",
+          "cachedResultName": "GPT-5.6-SOL"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "# IDENTIDAD\nEres Manta Cuida IA, el único agente que habla con el ciudadano. Trabajas para facilitar orientación y acceso a servicios de salud en Manta, Ecuador.\n\n# REGLAS SUPERIORES\n1. No diagnostiques enfermedades.\n2. No prescribas medicamentos, dosis ni suspensiones.\n3. No prometas atención, cupos o disponibilidad.\n4. No inventes centros, horarios, teléfonos ni fuentes.\n5. Si deterministic_safety.emergency_detected=true o priority_level=EMERGENCY, comienza con una instrucción breve de buscar atención inmediata o llamar al ECU 911. No hagas un cuestionario largo.\n6. Haz como máximo una pregunta importante por turno.\n7. Usa lenguaje sencillo, accesible y respetuoso.\n8. Los servicios deben venir exclusivamente de service_selection.services.\n9. Las fuentes educativas deben venir exclusivamente de prevention.sources.\n\n# SALIDA JSON ESTRICTA\n{\n  \"reply\": \"respuesta final\",\n  \"case\": {\n    \"reported_age\": null,\n    \"location\": \"\",\n    \"sector\": \"\",\n    \"reason\": \"\",\n    \"reported_symptoms\": [],\n    \"symptom_duration\": \"\",\n    \"relevant_conditions\": [],\n    \"accessibility_needs\": [],\n    \"access_barriers\": [],\n    \"priority_level\": \"PREVENTIVE\",\n    \"priority_score\": 0,\n    \"warning_signs\": [],\n    \"requested_service\": \"\",\n    \"recommended_service_type\": \"\",\n    \"summary\": \"\",\n    \"status\": \"ORIENTED\",\n    \"requires_human_review\": false,\n    \"consent\": false\n  },\n  \"services\": [],\n  \"sources\": [],\n  \"follow_up\": {\"required\": false, \"suggested_time\": null, \"action\": null},\n  \"ui\": {\"show_emergency_banner\": false, \"show_services\": false, \"show_human_review\": false},\n  \"agent\": \"GPT-5.6 Sol\"\n}"
+            },
+            {
+              "content": "=={{ JSON.stringify({ message: $('Normalizar Entrada').first().json.message, history: $('Leer Contexto').first().json.history, deterministic_safety: $('Reglas Determinísticas').first().json, orchestrator: $('Orquestador').first().json.output?.[0]?.content?.[0]?.text, triage: $('Agente de Clasificación y Acceso').first().json.output?.[0]?.content?.[0]?.text, service_selection: $('Agente de Acceso a Servicios').first().json.output?.[0]?.content?.[0]?.text, prevention: $('Agente de Prevención y Trámites').first().json.output?.[0]?.content?.[0]?.text }, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        1920,
+        0
+      ],
+      "id": "4792e4d4-0c70-46ca-857b-41d4dab7ee4d",
+      "name": "Asistente General de Salud"
+    },
+    {
+      "parameters": {
+        "jsCode": "function parseNode(name) {\n  try {\n    const raw = $(name).first().json;\n    const text = raw.output?.[0]?.content?.[0]?.text ?? raw.text ?? raw;\n    if (typeof text === 'object') return text;\n    return JSON.parse(String(text).replace(/```json/gi, '').replace(/```/g, '').trim());\n  } catch { return {}; }\n}\nconst general = parseNode('Asistente General de Salud');\nconst triage = parseNode('Agente de Clasificación y Acceso');\nconst serviceSelection = parseNode('Agente de Acceso a Servicios');\nconst prevention = parseNode('Agente de Prevención y Trámites');\nconst safety = $('Reglas Determinísticas').first().json;\nconst input = $('Normalizar Entrada').first().json;\nconst healthCase = { ...triage, ...(general.case || {}) };\nhealthCase.reason = healthCase.reason || input.message.slice(0, 180);\nhealthCase.reported_symptoms = Array.isArray(healthCase.reported_symptoms) ? healthCase.reported_symptoms : [];\nhealthCase.relevant_conditions = Array.isArray(healthCase.relevant_conditions) ? healthCase.relevant_conditions : [];\nhealthCase.accessibility_needs = Array.isArray(healthCase.accessibility_needs) ? healthCase.accessibility_needs : [];\nhealthCase.access_barriers = Array.isArray(healthCase.access_barriers) ? healthCase.access_barriers : [];\nhealthCase.warning_signs = [...new Set([...(Array.isArray(healthCase.warning_signs) ? healthCase.warning_signs : []), ...(safety.warning_signs || [])])];\nif (safety.emergency_detected) {\n  healthCase.priority_level = 'EMERGENCY';\n  healthCase.priority_score = Math.max(Number(healthCase.priority_score || 0), 95);\n  healthCase.status = 'PENDING_REVIEW';\n  healthCase.requires_human_review = true;\n}\nlet reply = String(general.reply || '').trim();\nif (!reply) reply = 'Puedo ayudarte a organizar tu necesidad y encontrar un servicio. ¿En qué sector de Manta te encuentras?';\nif (safety.emergency_detected && !/911|atenci[oó]n inmediata|emergencia/i.test(reply)) {\n  reply = 'Los síntomas descritos pueden requerir atención inmediata. Busca ayuda ahora o llama al ECU 911. No esperes una nueva respuesta del sistema. ' + reply;\n}\nconst services = Array.isArray(general.services) && general.services.length ? general.services : (Array.isArray(serviceSelection.services) ? serviceSelection.services : []);\nconst sources = Array.isArray(general.sources) && general.sources.length ? general.sources : (Array.isArray(prevention.sources) ? prevention.sources : []);\nconst followUp = general.follow_up || { required: ['EMERGENCY','PRIORITY'].includes(healthCase.priority_level), suggested_time: healthCase.priority_level === 'EMERGENCY' ? 'inmediato' : '24 horas', action: 'confirm_attention' };\nreturn { json: {\n  reply,\n  case: healthCase,\n  services,\n  sources,\n  follow_up: followUp,\n  ui: {\n    show_emergency_banner: safety.emergency_detected || healthCase.priority_level === 'EMERGENCY',\n    show_services: services.length > 0,\n    show_human_review: Boolean(healthCase.requires_human_review)\n  },\n  agent: 'GPT-5.6 Sol',\n  trace: { intent: parseNode('Orquestador').intent || 'OTHER', deterministic_safety: safety }\n} };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        0
+      ],
+      "id": "41ae3988-ab9e-4f40-ba2c-c3eb75d82a73",
+      "name": "Formatear Respuesta Segura"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO health_cases (\n user_id, conversation_id, reported_age, location, sector, reason, reported_symptoms, symptom_duration,\n relevant_conditions, accessibility_needs, access_barriers, priority_level, priority_score, warning_signs,\n requested_service, recommended_service_type, summary, status, requires_human_review, consent, next_follow_up_at\n) VALUES (\n $1::uuid, $2::uuid, $3::integer, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, $11::jsonb,\n $12::health_priority, $13::integer, $14::jsonb, $15, $16, $17, $18::health_case_status, $19::boolean, $20::boolean,\n CASE WHEN $21 = '' THEN NULL ELSE $21::timestamptz END\n)\nON CONFLICT (conversation_id) DO UPDATE SET\n reported_age=EXCLUDED.reported_age, location=EXCLUDED.location, sector=EXCLUDED.sector, reason=EXCLUDED.reason,\n reported_symptoms=EXCLUDED.reported_symptoms, symptom_duration=EXCLUDED.symptom_duration,\n relevant_conditions=EXCLUDED.relevant_conditions, accessibility_needs=EXCLUDED.accessibility_needs,\n access_barriers=EXCLUDED.access_barriers, priority_level=EXCLUDED.priority_level,\n priority_score=EXCLUDED.priority_score, warning_signs=EXCLUDED.warning_signs,\n requested_service=EXCLUDED.requested_service, recommended_service_type=EXCLUDED.recommended_service_type,\n summary=EXCLUDED.summary, status=EXCLUDED.status, requires_human_review=EXCLUDED.requires_human_review,\n consent=EXCLUDED.consent, next_follow_up_at=EXCLUDED.next_follow_up_at, updated_at=NOW()\nRETURNING id, status, priority_level;",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalizar Entrada').first().json.user_id, $('Normalizar Entrada').first().json.conversation_id, $('Formatear Respuesta Segura').first().json.case.reported_age || null, $('Formatear Respuesta Segura').first().json.case.location || 'Manta', $('Formatear Respuesta Segura').first().json.case.sector || '', $('Formatear Respuesta Segura').first().json.case.reason || '', JSON.stringify($('Formatear Respuesta Segura').first().json.case.reported_symptoms || []), $('Formatear Respuesta Segura').first().json.case.symptom_duration || '', JSON.stringify($('Formatear Respuesta Segura').first().json.case.relevant_conditions || []), JSON.stringify($('Formatear Respuesta Segura').first().json.case.accessibility_needs || []), JSON.stringify($('Formatear Respuesta Segura').first().json.case.access_barriers || []), $('Formatear Respuesta Segura').first().json.case.priority_level || 'PREVENTIVE', $('Formatear Respuesta Segura').first().json.case.priority_score || 0, JSON.stringify($('Formatear Respuesta Segura').first().json.case.warning_signs || []), $('Formatear Respuesta Segura').first().json.case.requested_service || '', $('Formatear Respuesta Segura').first().json.case.recommended_service_type || '', $('Formatear Respuesta Segura').first().json.case.summary || '', $('Formatear Respuesta Segura').first().json.case.status || 'ORIENTED', Boolean($('Formatear Respuesta Segura').first().json.case.requires_human_review), Boolean($('Formatear Respuesta Segura').first().json.case.consent), $('Formatear Respuesta Segura').first().json.case.next_follow_up_at || '' ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2400,
+        0
+      ],
+      "id": "f526dc73-77e8-4115-ba6e-5895e051c5bc",
+      "name": "Guardar Caso"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO case_followups (case_id, follow_up_type, case_summary, access_barriers, case_status, suggested_action, action_details, scheduled_at, requires_review)\nSELECT $1::uuid, 'agent_follow_up', $2, $3::jsonb, $4, $5, $6,\n CASE WHEN $7 = '' OR $7 IN ('inmediato','24 horas') THEN NOW() + CASE WHEN $7='inmediato' THEN INTERVAL '0 minutes' ELSE INTERVAL '24 hours' END ELSE $7::timestamptz END,\n $8::boolean\nWHERE $9::boolean = TRUE;",
+        "options": {
+          "queryReplacement": "={{ [ $('Guardar Caso').first().json.id, $('Formatear Respuesta Segura').first().json.case.summary || '', JSON.stringify($('Formatear Respuesta Segura').first().json.case.access_barriers || []), $('Formatear Respuesta Segura').first().json.case.status || 'ORIENTED', $('Formatear Respuesta Segura').first().json.follow_up?.action || 'confirm_attention', $('Formatear Respuesta Segura').first().json.reply, $('Formatear Respuesta Segura').first().json.follow_up?.suggested_time || '', Boolean($('Formatear Respuesta Segura').first().json.case.requires_human_review), Boolean($('Formatear Respuesta Segura').first().json.follow_up?.required) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2640,
+        0
+      ],
+      "id": "6a239896-870f-4c64-ac2b-63af94f7d9eb",
+      "name": "Programar Seguimiento",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('Formatear Respuesta Segura').first().json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2880,
+        0
+      ],
+      "id": "3018e441-41b4-4479-9b6d-60200117bdb8",
+      "name": "Responder Chat"
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "health/followup/pending",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        420
+      ],
+      "id": "44f00090-30e1-481a-b670-95ed5c7612ec",
+      "name": "Webhook Seguimientos Pendientes",
+      "webhookId": "4edc968c-3e03-4305-b635-b864a28a5ea5"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cf.id, cf.case_id, cf.case_summary, cf.access_barriers, cf.case_status, cf.suggested_action,\n cf.action_details, cf.scheduled_at AS follow_up_at, cf.requires_review AS requires_human_review, cf.created_at\nFROM case_followups cf WHERE cf.status='pending' ORDER BY cf.requires_review DESC, cf.scheduled_at ASC NULLS LAST;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        420
+      ],
+      "id": "1c6ec5c6-8fdf-4614-bd61-af728ee72f93",
+      "name": "Listar Seguimientos",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { data: $input.all().map(item => item.json).filter(item => item.id) } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        420
+      ],
+      "id": "d4492925-dfbd-44ba-9e03-2ad8a5d7f00d",
+      "name": "Consolidar Seguimientos"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        420
+      ],
+      "id": "0b9f0ec3-7eb8-4d38-baff-6683272685e3",
+      "name": "Responder Seguimientos"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "health/followup/review",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        700
+      ],
+      "id": "7e3dfdc6-bd1c-4343-b937-e515052e4c53",
+      "name": "Webhook Revisar Seguimiento",
+      "webhookId": "d43113d5-fae2-4bba-b0a1-c292cb1cb50a"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body=$json.body||{};\nif(!body.followup_id||!body.reviewed_by||!['approved','edited','rejected'].includes(body.status)) throw new Error('Solicitud inválida');\nif(body.status==='edited'&&!String(body.edited_action||'').trim()) throw new Error('edited_action es obligatorio');\nreturn {json:{followup_id:String(body.followup_id),reviewed_by:String(body.reviewed_by),status:body.status,edited_action:String(body.edited_action||'')}};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        700
+      ],
+      "id": "174615c2-fad6-4745-a007-95df798c55e0",
+      "name": "Validar Revisión"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE case_followups SET status=$1,\n final_action=CASE WHEN $1='edited' THEN $2 WHEN $1='approved' THEN suggested_action ELSE NULL END,\n reviewed_by=$3::uuid, reviewed_at=NOW(), updated_at=NOW()\nWHERE id=$4::uuid RETURNING id, status, final_action;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validar Revisión').first().json.status, $('Validar Revisión').first().json.edited_action, $('Validar Revisión').first().json.reviewed_by, $('Validar Revisión').first().json.followup_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        480,
+        700
+      ],
+      "id": "4601a379-c8eb-47d0-8e33-272c7907917a",
+      "name": "Guardar Revisión"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, followup: $json } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        700
+      ],
+      "id": "dace4f3b-b5e3-4e47-96bc-6f2876a27105",
+      "name": "Responder Revisión"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Salud": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Entrada": {
+      "main": [
+        [
+          {
+            "node": "Reglas Determinísticas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reglas Determinísticas": {
+      "main": [
+        [
+          {
+            "node": "Leer Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer Contexto": {
+      "main": [
+        [
+          {
+            "node": "Orquestador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestador": {
+      "main": [
+        [
+          {
+            "node": "Agente de Clasificación y Acceso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de Clasificación y Acceso": {
+      "main": [
+        [
+          {
+            "node": "Consultar Servicios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Servicios": {
+      "main": [
+        [
+          {
+            "node": "Consultar Contenido Aprobado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Contenido Aprobado": {
+      "main": [
+        [
+          {
+            "node": "Agente de Acceso a Servicios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de Acceso a Servicios": {
+      "main": [
+        [
+          {
+            "node": "Agente de Prevención y Trámites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de Prevención y Trámites": {
+      "main": [
+        [
+          {
+            "node": "Asistente General de Salud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Asistente General de Salud": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta Segura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta Segura": {
+      "main": [
+        [
+          {
+            "node": "Guardar Caso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Caso": {
+      "main": [
+        [
+          {
+            "node": "Programar Seguimiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Programar Seguimiento": {
+      "main": [
+        [
+          {
+            "node": "Responder Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Seguimientos Pendientes": {
+      "main": [
+        [
+          {
+            "node": "Listar Seguimientos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listar Seguimientos": {
+      "main": [
+        [
+          {
+            "node": "Consolidar Seguimientos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar Seguimientos": {
+      "main": [
+        [
+          {
+            "node": "Responder Seguimientos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Revisar Seguimiento": {
+      "main": [
+        [
+          {
+            "node": "Validar Revisión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Revisión": {
+      "main": [
+        [
+          {
+            "node": "Guardar Revisión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Revisión": {
+      "main": [
+        [
+          {
+            "node": "Responder Revisión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "2c74e7a3-d427-4c31-ad6a-d61ae26c9c79",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

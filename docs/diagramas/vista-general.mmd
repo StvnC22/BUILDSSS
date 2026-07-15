@@ -1,0 +1,13 @@
+flowchart LR
+  U[Ciudadano] --> V[Vue 3]
+  V --> API[Vercel API]
+  API --> N[n8n]
+  N --> S[Reglas de seguridad]
+  S --> O[Orquestador GPT-5.6]
+  O --> T[Clasificación GPT-5.6]
+  T --> A[Servicios GPT-5.6]
+  T --> P[Prevención GPT-5.6]
+  A --> G[Asistente General GPT-5.6]
+  P --> G
+  G --> DB[(Supabase)]
+  DB --> V

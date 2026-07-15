@@ -1,0 +1,16 @@
+sequenceDiagram
+  participant U as Usuario
+  participant V as Vue
+  participant N as n8n
+  participant AI as GPT-5.6
+  participant DB as Supabase
+  U->>V: Mensaje
+  V->>DB: Guarda mensaje
+  V->>N: Webhook health/chat
+  N->>N: Reglas determinísticas
+  N->>AI: Orquestar y clasificar
+  N->>DB: Consulta servicios y contenido
+  N->>AI: Genera respuesta final
+  N->>DB: Guarda caso y seguimiento
+  N-->>V: Respuesta estructurada
+  V-->>U: Texto, prioridad, servicios y fuentes
