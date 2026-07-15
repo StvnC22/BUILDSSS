@@ -1,6 +1,5 @@
 /** URL canónica de producción (confirmación de email / redirects) */
-export const PRODUCTION_APP_URL =
-  'https://hackathon-agentic-scale-by-taws-11-07-syntax-error3.vercel.app'
+export const PRODUCTION_APP_URL = 'https://buildsss.vercel.app'
 
 /** Origen actual de la app (localhost en dev, Vercel en prod) */
 export function getAppOrigin(): string {
@@ -20,6 +19,8 @@ export const SUPABASE_REDIRECT_ALLOWLIST = [
   `${PRODUCTION_APP_URL}/**`,
   `${PRODUCTION_APP_URL}/auth/callback`,
   `${PRODUCTION_APP_URL}/login`,
+  'https://hackathon-agentic-scale-by-taws-11-07-syntax-error3.vercel.app/**',
+  'https://hackathon-agentic-scale-by-taws-11-07-syntax-error3.vercel.app/auth/callback',
   'https://hackathon-agentic-scale-by-taws-11.vercel.app/**',
   'https://hackathon-agentic-scale-by-taws-11.vercel.app/auth/callback',
   'http://localhost:5173/**',
